@@ -13,7 +13,7 @@ alt:V Easy Launcher is a simple and convenient application for managing your alt
 
 ## Installation
 
-1. **Download the latest version** from the [Releases](https://github.com/username/repository/releases) section.
+1. **Download the latest version** from the [Releases](https://github.com/str1xxxx/alt-V-Easy-Launch/releases) section.
 2. **Extract the archive** to a convenient location.
 
 ## Usage
