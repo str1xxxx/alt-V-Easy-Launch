@@ -1,6 +1,6 @@
 # alt:V Easy Launcher
 
-alt:V Easy Launcher is a simple and convenient application for managing your alt:V server. This launcher allows you to easily switch between debug mode, change  branches, and launch the alt:V Client with a single click.
+alt:V Easy Launcher is a simple and easy-to-use application to launch alt:V. With it you can easily switch between debug modes, change branches and start the alt:V client with a single click.
 
 ![alt:V Easy Launcher](preview.png)  <!-- Add a screenshot of your application -->
 
