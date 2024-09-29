@@ -169,9 +169,9 @@ class AltVLauncher(QWidget):
         graphics_settings = {
             'TextureQuality': ('Normal', 'High', 'Very High'),
             'ShaderQuality': ('Normal', 'High', 'Very High'),
-            'ShadowQuality': ('Normal', 'High', 'Very High', 'Ultra'),
-            'ReflectionQuality': ('Normal', 'High', 'Very High', 'Ultra'),
-            'WaterQuality': ('Normal', 'High', 'Very High', 'Ultra'),
+            'ShadowQuality': ('Normal', 'High', 'Very High'),
+            'ReflectionQuality': ('Normal', 'High', 'Very High'),
+            'WaterQuality': ('Normal', 'High', 'Very High'),
             'GrassQuality': ('Normal', 'High', 'Very High', 'Ultra'),
             'AnisotropicFiltering': ('Off', 'x2', 'x4', 'x8', 'x16'),
             'AmbientOcclusion': ('Off', 'Normal', 'High'),
