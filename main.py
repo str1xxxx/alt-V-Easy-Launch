@@ -133,6 +133,7 @@ class AltVLauncher(QWidget):
     def create_profile_widget(self, profile_name):
         widget = QWidget()
         layout = QVBoxLayout()
+        widget.graphics_controls = {}  # Храним элементы управления графикой внутри виджета профиля
 
         # Scroll Area for settings
         scroll_area = QScrollArea()
@@ -165,7 +166,7 @@ class AltVLauncher(QWidget):
         graphics_layout = QVBoxLayout()
 
         # Define the important graphics settings
-        self.graphics_settings = {
+        graphics_settings = {
             'TextureQuality': ('Normal', 'High', 'Very High'),
             'ShaderQuality': ('Normal', 'High', 'Very High'),
             'ShadowQuality': ('Normal', 'High', 'Very High', 'Ultra'),
@@ -178,9 +179,8 @@ class AltVLauncher(QWidget):
             'VSync': ('Off', 'On')
         }
 
-        self.graphics_controls = {}
-
-        for setting, options in self.graphics_settings.items():
+        # Используем widget.graphics_controls вместо self.graphics_controls
+        for setting, options in graphics_settings.items():
             setting_layout = QHBoxLayout()
             label = QLabel(setting.replace('Quality', ' Quality'), self)
             label.setToolTip(f'Select the {setting.replace("Quality", " quality").lower()}.')
@@ -192,7 +192,7 @@ class AltVLauncher(QWidget):
             setting_layout.addStretch()
             setting_layout.addWidget(combo)
             graphics_layout.addLayout(setting_layout)
-            self.graphics_controls[setting] = combo
+            widget.graphics_controls[setting] = combo  # Храним контролы в виджете профиля
 
         graphics_group.setLayout(graphics_layout)
         scroll_layout.addWidget(graphics_group)
@@ -334,7 +334,7 @@ class AltVLauncher(QWidget):
             self.show_error_message(f'Failed to update altv.toml: {e}')
 
     def apply_graphics_settings(self, graphics_controls):
-        # Get the path to the GTA 5 settings.xml file
+    # Get the path to the GTA 5 settings.xml file
         settings_path = os.path.join(os.environ['USERPROFILE'], 'Documents', 'Rockstar Games', 'GTA V', 'settings.xml')
 
         if not os.path.exists(settings_path):
@@ -353,32 +353,30 @@ class AltVLauncher(QWidget):
                 for setting, combo in graphics_controls.items():
                     value = combo.currentText()
                     xml_tag = self.get_xml_tag_for_setting(setting)
-                    if xml_tag and xml_tag['section'] == 'graphics':
-                        xml_element_name = xml_tag['name']
-                        elem = graphics_elem.find(xml_element_name)
+                    if xml_tag:
+                        elem = graphics_elem.find(xml_tag)
                         if elem is not None:
                             elem.set('value', self.get_xml_value_for_setting(setting, value))
                         else:
                             # Create the element if it doesn't exist
-                            ET.SubElement(graphics_elem, xml_element_name, {'value': self.get_xml_value_for_setting(setting, value)})
+                            ET.SubElement(graphics_elem, xml_tag, {'value': self.get_xml_value_for_setting(setting, value)})
 
             # Update settings in the <video> section
             video_elem = root.find('video')
             if video_elem is not None:
                 for setting, combo in graphics_controls.items():
-                    value = combo.currentText()
-                    xml_tag = self.get_xml_tag_for_setting(setting)
-                    if xml_tag and xml_tag['section'] == 'video':
-                        xml_element_name = xml_tag['name']
-                        elem = video_elem.find(xml_element_name)
-                        if elem is not None:
-                            elem.set('value', self.get_xml_value_for_setting(setting, value))
-                        else:
-                            # Create the element if it doesn't exist
-                            ET.SubElement(video_elem, xml_element_name, {'value': self.get_xml_value_for_setting(setting, value)})
+                    if setting == 'VSync':
+                        value = combo.currentText()
+                        xml_tag = self.get_xml_tag_for_setting(setting)
+                        if xml_tag:
+                            elem = video_elem.find(xml_tag)
+                            if elem is not None:
+                                elem.set('value', self.get_xml_value_for_setting(setting, value))
+                            else:
+                                # Create the element if it doesn't exist
+                                ET.SubElement(video_elem, xml_tag, {'value': self.get_xml_value_for_setting(setting, value)})
 
             # Special handling for AntiAliasing (FXAA and MSAA)
-            # FXAA is a boolean setting, MSAA is an integer value
             msaa_value = graphics_controls['AntiAliasing'].currentText()
             if msaa_value.startswith('MSAA'):
                 msaa_level = self.get_xml_value_for_setting('AntiAliasing', msaa_value)
@@ -390,19 +388,19 @@ class AltVLauncher(QWidget):
                 msaa_level = '0'
                 fxaa_enabled = 'false'
 
-            # Update MSAA
+            # Update MSAA in <graphics>
             msaa_elem = graphics_elem.find('MSAA')
             if msaa_elem is not None:
                 msaa_elem.set('value', msaa_level)
             else:
                 ET.SubElement(graphics_elem, 'MSAA', {'value': msaa_level})
 
-            # Update FXAA
-            fxaa_elem = graphics_elem.find('FXAA')
+            # Update FXAA_Enabled in <graphics>
+            fxaa_elem = graphics_elem.find('FXAA_Enabled')
             if fxaa_elem is not None:
                 fxaa_elem.set('value', fxaa_enabled)
             else:
-                ET.SubElement(graphics_elem, 'FXAA', {'value': fxaa_enabled})
+                ET.SubElement(graphics_elem, 'FXAA_Enabled', {'value': fxaa_enabled})
 
             # Save the modified settings.xml
             tree.write(settings_path, encoding='UTF-8', xml_declaration=True)
@@ -410,25 +408,27 @@ class AltVLauncher(QWidget):
             self.show_error_message(f'Failed to write graphics settings: {e}')
 
     def get_xml_tag_for_setting(self, setting):
-        # Map the settings to their corresponding XML tags and sections
+    # Map the settings to their corresponding XML tags
         tag_mapping = {
-            'TextureQuality': {'section': 'graphics', 'name': 'TextureQuality'},
-            'ShaderQuality': {'section': 'graphics', 'name': 'ShaderQuality'},
-            'ShadowQuality': {'section': 'graphics', 'name': 'ShadowQuality'},
-            'ReflectionQuality': {'section': 'graphics', 'name': 'ReflectionQuality'},
-            'WaterQuality': {'section': 'graphics', 'name': 'WaterQuality'},
-            'GrassQuality': {'section': 'graphics', 'name': 'GrassQuality'},
-            'AnisotropicFiltering': {'section': 'graphics', 'name': 'AnisotropicFiltering'},
-            'AmbientOcclusion': {'section': 'graphics', 'name': 'SSAO'},
-            'VSync': {'section': 'video', 'name': 'VSync'},
+            'TextureQuality': 'TextureQuality',
+            'ShaderQuality': 'ShaderQuality',
+            'ShadowQuality': 'ShadowQuality',
+            'ReflectionQuality': 'ReflectionQuality',
+            'WaterQuality': 'WaterQuality',
+            'GrassQuality': 'GrassQuality',
+            'AnisotropicFiltering': 'AnisotropicFiltering',
+            'AmbientOcclusion': 'SSAO',  # В вашем settings.xml это называется SSAO
+            'VSync': 'VSync',
         }
         return tag_mapping.get(setting)
+
+
 
     def get_xml_value_for_setting(self, setting, value):
         # Convert user-friendly values to XML values
         value_mapping = {
-            'Off': 'false',
-            'On': 'true',
+            'Off': '0',
+            'On': '1',
             'FXAA': '1',
             'MSAA x2': '2',
             'MSAA x4': '4',
@@ -441,6 +441,8 @@ class AltVLauncher(QWidget):
             'x4': '4',
             'x8': '8',
             'x16': '16',
+            'false': 'false',
+            'true': 'true',
         }
         return value_mapping.get(value, '0')
 
@@ -468,7 +470,7 @@ class AltVLauncher(QWidget):
 
         self.toggle_debug_mode(debug_checkbox)
         self.switch_branch(branch_combo)
-        self.apply_graphics_settings(self.graphics_controls)
+        self.apply_graphics_settings(profile_widget.graphics_controls)
 
         exe_path = os.path.join(self.altv_folder, 'altv.exe')
 
@@ -494,13 +496,17 @@ class AltVLauncher(QWidget):
                     self.load_profile_settings(index, self.profiles[profile_name])
 
                 if last_profile in self.profiles:
-                    index = self.profile_tabs.indexOf(self.profile_tabs.findChild(QWidget, last_profile))
-                    self.profile_tabs.setCurrentIndex(index)
-                    self.current_profile = last_profile
+                    # Найдем индекс вкладки с последним выбранным профилем
+                    for i in range(self.profile_tabs.count()):
+                        if self.profile_tabs.tabText(i) == last_profile:
+                            self.profile_tabs.setCurrentIndex(i)
+                            self.current_profile = last_profile
+                            break
                 elif self.profile_tabs.count() > 0:
                     self.current_profile = self.profile_tabs.tabText(0)
                 else:
                     self.current_profile = None
+
 
     def save_settings(self):
         # Gather settings from all profiles
@@ -519,7 +525,7 @@ class AltVLauncher(QWidget):
             debug_checkbox = debug_group.layout().itemAt(0).widget()
 
             graphics_settings = {}
-            for setting, combo in self.graphics_controls.items():
+            for setting, combo in profile_widget.graphics_controls.items():
                 graphics_settings[setting] = combo.currentText()
 
             self.profiles[profile_name] = {
@@ -557,8 +563,8 @@ class AltVLauncher(QWidget):
 
         graphics_settings = settings.get('graphics_settings', {})
         for setting, value in graphics_settings.items():
-            if setting in self.graphics_controls:
-                self.graphics_controls[setting].setCurrentText(value)
+            if setting in profile_widget.graphics_controls:
+                profile_widget.graphics_controls[setting].setCurrentText(value)
 
     def closeEvent(self, event):
         self.save_settings()
