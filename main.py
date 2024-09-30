@@ -5,9 +5,9 @@ import xml.etree.ElementTree as ET
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog,
     QLineEdit, QLabel, QComboBox, QCheckBox, QMessageBox, QHBoxLayout,
-    QTabWidget, QGroupBox, QScrollArea, QInputDialog, QToolTip
+    QTabWidget, QGroupBox, QScrollArea, QInputDialog
 )
-from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt
 
 SETTINGS_FILE = 'settings.json'
@@ -20,6 +20,7 @@ class AltVLauncher(QWidget):
         self.profiles = {}
         self.current_profile = None
         self.altv_folder = ''
+        self.loading_settings = False  # Flag to track if settings are being loaded
 
         self.initUI()
         self.load_settings()
@@ -85,7 +86,7 @@ class AltVLauncher(QWidget):
         self.folder_path_input = QLineEdit(self)
         self.folder_path_input.setPlaceholderText('Path to alt:V folder')
         self.folder_path_input.setToolTip('Select the folder where altv.exe is located.')
-        self.folder_path_input.textChanged.connect(self.save_settings)
+        self.folder_path_input.textChanged.connect(self.on_altv_folder_changed)
         folder_path_btn = QPushButton('...', self)
         folder_path_btn.setIcon(QIcon.fromTheme('folder-open'))
         folder_path_btn.setToolTip('Browse for alt:V folder.')
@@ -133,7 +134,7 @@ class AltVLauncher(QWidget):
     def create_profile_widget(self, profile_name):
         widget = QWidget()
         layout = QVBoxLayout()
-        widget.graphics_controls = {}  # Храним элементы управления графикой внутри виджета профиля
+        widget.graphics_controls = {}  # Store graphics controls within the profile widget
 
         # Scroll Area for settings
         scroll_area = QScrollArea()
@@ -146,26 +147,25 @@ class AltVLauncher(QWidget):
         branch_combo = QComboBox(self)
         branch_combo.addItems(['release', 'rc', 'dev'])
         branch_combo.setToolTip('Select the alt:V branch to use.')
-        branch_combo.currentIndexChanged.connect(self.save_settings)
         branch_layout.addWidget(branch_combo)
         branch_group.setLayout(branch_layout)
         scroll_layout.addWidget(branch_group)
+        widget.branch_combo = branch_combo  # Save reference to branch_combo
 
         # Debug Mode
         debug_group = QGroupBox('Debug Mode')
         debug_layout = QHBoxLayout()
         debug_checkbox = QCheckBox('Enable Debug Mode', self)
         debug_checkbox.setToolTip('Enable or disable debug mode.')
-        debug_checkbox.stateChanged.connect(self.save_settings)
         debug_layout.addWidget(debug_checkbox)
         debug_group.setLayout(debug_layout)
         scroll_layout.addWidget(debug_group)
+        widget.debug_checkbox = debug_checkbox  # Save reference to debug_checkbox
 
         # Graphics Settings
         graphics_group = QGroupBox('Graphics Settings')
         graphics_layout = QVBoxLayout()
 
-        # Define the important graphics settings
         graphics_settings = {
             'TextureQuality': ('Normal', 'High', 'Very High'),
             'ShaderQuality': ('Normal', 'High', 'Very High'),
@@ -179,7 +179,6 @@ class AltVLauncher(QWidget):
             'VSync': ('Off', 'On')
         }
 
-        # Используем widget.graphics_controls вместо self.graphics_controls
         for setting, options in graphics_settings.items():
             setting_layout = QHBoxLayout()
             label = QLabel(setting.replace('Quality', ' Quality'), self)
@@ -187,12 +186,11 @@ class AltVLauncher(QWidget):
             combo = QComboBox(self)
             combo.addItems(options)
             combo.setToolTip(f'Select the {setting.replace("Quality", " quality").lower()}.')
-            combo.currentIndexChanged.connect(self.save_settings)
             setting_layout.addWidget(label)
             setting_layout.addStretch()
             setting_layout.addWidget(combo)
             graphics_layout.addLayout(setting_layout)
-            widget.graphics_controls[setting] = combo  # Храним контролы в виджете профиля
+            widget.graphics_controls[setting] = combo  # Store controls in the profile widget
 
         graphics_group.setLayout(graphics_layout)
         scroll_layout.addWidget(graphics_group)
@@ -205,12 +203,129 @@ class AltVLauncher(QWidget):
         widget.setLayout(layout)
         return widget
 
+    def connect_signals(self, profile_widget):
+        profile_widget.branch_combo.currentIndexChanged.connect(self.on_branch_changed)
+        profile_widget.debug_checkbox.stateChanged.connect(self.on_debug_mode_changed)
+        for combo in profile_widget.graphics_controls.values():
+            combo.currentIndexChanged.connect(self.on_graphics_setting_changed)
+
+    def on_graphics_setting_changed(self):
+        if self.loading_settings:
+            return
+        self.save_settings()
+
+    def on_debug_mode_changed(self, state):
+        if self.loading_settings:
+            return  # Ignore changes during settings loading
+        debug_mode = (state == Qt.Checked)
+        self.save_settings()
+        if self.altv_folder and os.path.exists(os.path.join(self.altv_folder, 'altv.toml')):
+            self.toggle_debug_mode(debug_mode)
+
+    def on_branch_changed(self, index):
+        if self.loading_settings:
+            return  # Ignore changes during settings loading
+        branch_combo = self.sender()
+        branch_name = branch_combo.currentText()
+        self.save_settings()
+        if self.altv_folder and os.path.exists(os.path.join(self.altv_folder, 'altv.toml')):
+            self.switch_branch(branch_name)
+
+    def save_settings(self):
+        if self.loading_settings:
+            return  # Do not save settings while loading
+        # Gather settings from all profiles
+        for index in range(self.profile_tabs.count()):
+            profile_name = self.profile_tabs.tabText(index)
+            profile_widget = self.profile_tabs.widget(index)
+
+            graphics_settings = {}
+            for setting, combo in profile_widget.graphics_controls.items():
+                graphics_settings[setting] = combo.currentText()
+
+            self.profiles[profile_name] = {
+                'branch': profile_widget.branch_combo.currentText(),
+                'debug_mode': profile_widget.debug_checkbox.isChecked(),
+                'graphics_settings': graphics_settings
+            }
+
+        data = {
+            'altv_folder': self.folder_path_input.text(),
+            'last_selected_profile': self.current_profile,
+            'profiles': self.profiles
+        }
+
+        with open(SETTINGS_FILE, 'w') as file:
+            json.dump(data, file, indent=4)
+
+    def load_settings(self):
+        if os.path.exists(SETTINGS_FILE):
+            self.loading_settings = True  # Begin loading settings
+            with open(SETTINGS_FILE, 'r') as file:
+                data = json.load(file)
+                self.profiles = data.get('profiles', {})
+                self.altv_folder = data.get('altv_folder', '')
+                self.folder_path_input.setText(self.altv_folder)
+                last_profile = data.get('last_selected_profile', '')
+
+                for profile_name in self.profiles:
+                    profile_widget = self.create_profile_widget(profile_name)
+                    self.profile_tabs.addTab(profile_widget, profile_name)
+                    index = self.profile_tabs.indexOf(profile_widget)
+                    self.load_profile_settings(index, self.profiles[profile_name])
+                    self.connect_signals(profile_widget)
+
+                if last_profile in self.profiles:
+                    # Find the index of the last selected profile tab
+                    for i in range(self.profile_tabs.count()):
+                        if self.profile_tabs.tabText(i) == last_profile:
+                            self.profile_tabs.setCurrentIndex(i)
+                            self.current_profile = last_profile
+                            break
+                elif self.profile_tabs.count() > 0:
+                    self.current_profile = self.profile_tabs.tabText(0)
+                else:
+                    self.current_profile = None
+            self.loading_settings = False  # Finished loading settings
+
+    def load_profile_settings(self, index, settings):
+        profile_widget = self.profile_tabs.widget(index)
+        self.loading_settings = True  # Start loading profile settings
+
+        branch = settings.get('branch', 'release')
+        if branch in ['release', 'rc', 'dev']:
+            profile_widget.branch_combo.setCurrentText(branch)
+        else:
+            profile_widget.branch_combo.setCurrentIndex(0)  # Default
+
+        debug_mode = settings.get('debug_mode', False)
+        profile_widget.debug_checkbox.setChecked(debug_mode)
+
+        graphics_settings = settings.get('graphics_settings', {})
+        for setting, value in graphics_settings.items():
+            if setting in profile_widget.graphics_controls:
+                combo = profile_widget.graphics_controls[setting]
+                combo.setCurrentText(value)
+
+        self.loading_settings = False  # Finished loading profile settings
+
     def browse_folder_path(self):
         folder_path = QFileDialog.getExistingDirectory(self, 'Select alt:V folder')
         if folder_path:
             self.folder_path_input.setText(folder_path)
             self.altv_folder = folder_path
             self.save_settings()
+            # Apply current profile settings after specifying the alt:V folder
+            if self.current_profile:
+                profile_settings = self.profiles.get(self.current_profile, {})
+                debug_mode = profile_settings.get('debug_mode', False)
+                branch_name = profile_settings.get('branch', 'release')
+                self.toggle_debug_mode(debug_mode)
+                self.switch_branch(branch_name)
+
+    def on_altv_folder_changed(self, text):
+        self.altv_folder = text
+        self.save_settings()
 
     def add_profile(self):
         profile_name, ok = QInputDialog.getText(self, 'Create Profile', 'Enter profile name:')
@@ -223,6 +338,7 @@ class AltVLauncher(QWidget):
             self.profile_tabs.addTab(profile_widget, profile_name)
             self.profile_tabs.setCurrentWidget(profile_widget)
             self.current_profile = profile_name
+            self.connect_signals(profile_widget)
             self.save_settings()
 
     def delete_profile(self, index):
@@ -240,6 +356,13 @@ class AltVLauncher(QWidget):
         if index >= 0:
             self.current_profile = self.profile_tabs.tabText(index)
             self.save_settings()
+            # Apply current profile settings
+            if self.altv_folder and os.path.exists(os.path.join(self.altv_folder, 'altv.toml')):
+                profile_settings = self.profiles.get(self.current_profile, {})
+                debug_mode = profile_settings.get('debug_mode', False)
+                branch_name = profile_settings.get('branch', 'release')
+                self.toggle_debug_mode(debug_mode)
+                self.switch_branch(branch_name)
         else:
             self.current_profile = None
 
@@ -259,6 +382,7 @@ class AltVLauncher(QWidget):
                     self.profile_tabs.setCurrentWidget(profile_widget)
                     self.current_profile = profile_name
                     self.load_profile_settings(self.profile_tabs.currentIndex(), profile_data)
+                    self.connect_signals(profile_widget)
                     self.save_settings()
             except Exception as e:
                 self.show_error_message(f'Failed to import profile: {e}')
@@ -275,11 +399,14 @@ class AltVLauncher(QWidget):
         else:
             self.show_error_message('No profile selected.')
 
-    def toggle_debug_mode(self, debug_checkbox):
+    def toggle_debug_mode(self, debug_mode):
+        if not self.altv_folder:
+            # alt:V folder path is not set
+            return
         toml_path = os.path.join(self.altv_folder, 'altv.toml')
 
         if not os.path.exists(toml_path):
-            self.show_error_message('altv.toml not found in the specified folder.')
+            # altv.toml file does not exist
             return
 
         try:
@@ -287,7 +414,6 @@ class AltVLauncher(QWidget):
                 lines = file.readlines()
 
             new_lines = []
-            debug_mode = debug_checkbox.isChecked()
             debug_set = False
             for line in lines:
                 if line.strip().startswith('debug'):
@@ -304,12 +430,14 @@ class AltVLauncher(QWidget):
         except Exception as e:
             self.show_error_message(f'Failed to update altv.toml: {e}')
 
-    def switch_branch(self, branch_combo):
+    def switch_branch(self, branch_name):
+        if not self.altv_folder:
+            # alt:V folder path is not set
+            return
         toml_path = os.path.join(self.altv_folder, 'altv.toml')
-        branch_name = branch_combo.currentText()
 
         if not os.path.exists(toml_path):
-            self.show_error_message('altv.toml not found in the specified folder.')
+            # altv.toml file does not exist
             return
 
         try:
@@ -334,7 +462,7 @@ class AltVLauncher(QWidget):
             self.show_error_message(f'Failed to update altv.toml: {e}')
 
     def apply_graphics_settings(self, graphics_controls):
-    # Get the path to the GTA 5 settings.xml file
+        # Get the path to the GTA 5 settings.xml file
         settings_path = os.path.join(os.environ['USERPROFILE'], 'Documents', 'Rockstar Games', 'GTA V', 'settings.xml')
 
         if not os.path.exists(settings_path):
@@ -353,7 +481,7 @@ class AltVLauncher(QWidget):
                 for setting, combo in graphics_controls.items():
                     value = combo.currentText()
                     xml_tag = self.get_xml_tag_for_setting(setting)
-                    if xml_tag:
+                    if xml_tag and setting != 'AntiAliasing':  # AntiAliasing handled separately
                         elem = graphics_elem.find(xml_tag)
                         if elem is not None:
                             elem.set('value', self.get_xml_value_for_setting(setting, value))
@@ -389,18 +517,19 @@ class AltVLauncher(QWidget):
                 fxaa_enabled = 'false'
 
             # Update MSAA in <graphics>
-            msaa_elem = graphics_elem.find('MSAA')
-            if msaa_elem is not None:
-                msaa_elem.set('value', msaa_level)
-            else:
-                ET.SubElement(graphics_elem, 'MSAA', {'value': msaa_level})
+            if graphics_elem is not None:
+                msaa_elem = graphics_elem.find('MSAA')
+                if msaa_elem is not None:
+                    msaa_elem.set('value', msaa_level)
+                else:
+                    ET.SubElement(graphics_elem, 'MSAA', {'value': msaa_level})
 
-            # Update FXAA_Enabled in <graphics>
-            fxaa_elem = graphics_elem.find('FXAA_Enabled')
-            if fxaa_elem is not None:
-                fxaa_elem.set('value', fxaa_enabled)
-            else:
-                ET.SubElement(graphics_elem, 'FXAA_Enabled', {'value': fxaa_enabled})
+                # Update FXAA_Enabled in <graphics>
+                fxaa_elem = graphics_elem.find('FXAA_Enabled')
+                if fxaa_elem is not None:
+                    fxaa_elem.set('value', fxaa_enabled)
+                else:
+                    ET.SubElement(graphics_elem, 'FXAA_Enabled', {'value': fxaa_enabled})
 
             # Save the modified settings.xml
             tree.write(settings_path, encoding='UTF-8', xml_declaration=True)
@@ -408,7 +537,7 @@ class AltVLauncher(QWidget):
             self.show_error_message(f'Failed to write graphics settings: {e}')
 
     def get_xml_tag_for_setting(self, setting):
-    # Map the settings to their corresponding XML tags
+        # Map the settings to their corresponding XML tags
         tag_mapping = {
             'TextureQuality': 'TextureQuality',
             'ShaderQuality': 'ShaderQuality',
@@ -417,12 +546,10 @@ class AltVLauncher(QWidget):
             'WaterQuality': 'WaterQuality',
             'GrassQuality': 'GrassQuality',
             'AnisotropicFiltering': 'AnisotropicFiltering',
-            'AmbientOcclusion': 'SSAO',  # В вашем settings.xml это называется SSAO
+            'AmbientOcclusion': 'SSAO',  # In your settings.xml, this is called SSAO
             'VSync': 'VSync',
         }
         return tag_mapping.get(setting)
-
-
 
     def get_xml_value_for_setting(self, setting, value):
         # Convert user-friendly values to XML values
@@ -455,21 +582,13 @@ class AltVLauncher(QWidget):
             self.show_error_message('alt:V folder path is empty.')
             return
 
-        index = self.profile_tabs.currentIndex()
-        profile_widget = self.profile_tabs.widget(index)
-        layout = profile_widget.layout()
-        scroll_area = layout.itemAt(0).widget()
-        scroll_widget = scroll_area.widget()
-        scroll_layout = scroll_widget.layout()
+        profile_widget = self.profile_tabs.currentWidget()
 
-        # Retrieve controls
-        branch_group = scroll_layout.itemAt(0).widget()
-        branch_combo = branch_group.layout().itemAt(0).widget()
-        debug_group = scroll_layout.itemAt(1).widget()
-        debug_checkbox = debug_group.layout().itemAt(0).widget()
-
-        self.toggle_debug_mode(debug_checkbox)
-        self.switch_branch(branch_combo)
+        # Apply debug_mode and branch settings before launching
+        debug_mode = profile_widget.debug_checkbox.isChecked()
+        branch_name = profile_widget.branch_combo.currentText()
+        self.toggle_debug_mode(debug_mode)
+        self.switch_branch(branch_name)
         self.apply_graphics_settings(profile_widget.graphics_controls)
 
         exe_path = os.path.join(self.altv_folder, 'altv.exe')
@@ -479,92 +598,6 @@ class AltVLauncher(QWidget):
             return
 
         os.system(f'start "" "{exe_path}"')
-
-    def load_settings(self):
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, 'r') as file:
-                data = json.load(file)
-                self.profiles = data.get('profiles', {})
-                self.altv_folder = data.get('altv_folder', '')
-                self.folder_path_input.setText(self.altv_folder)
-                last_profile = data.get('last_selected_profile', '')
-
-                for profile_name in self.profiles:
-                    profile_widget = self.create_profile_widget(profile_name)
-                    self.profile_tabs.addTab(profile_widget, profile_name)
-                    index = self.profile_tabs.indexOf(profile_widget)
-                    self.load_profile_settings(index, self.profiles[profile_name])
-
-                if last_profile in self.profiles:
-                    # Найдем индекс вкладки с последним выбранным профилем
-                    for i in range(self.profile_tabs.count()):
-                        if self.profile_tabs.tabText(i) == last_profile:
-                            self.profile_tabs.setCurrentIndex(i)
-                            self.current_profile = last_profile
-                            break
-                elif self.profile_tabs.count() > 0:
-                    self.current_profile = self.profile_tabs.tabText(0)
-                else:
-                    self.current_profile = None
-
-
-    def save_settings(self):
-        # Gather settings from all profiles
-        for index in range(self.profile_tabs.count()):
-            profile_name = self.profile_tabs.tabText(index)
-            profile_widget = self.profile_tabs.widget(index)
-            layout = profile_widget.layout()
-            scroll_area = layout.itemAt(0).widget()
-            scroll_widget = scroll_area.widget()
-            scroll_layout = scroll_widget.layout()
-
-            # Retrieve controls
-            branch_group = scroll_layout.itemAt(0).widget()
-            branch_combo = branch_group.layout().itemAt(0).widget()
-            debug_group = scroll_layout.itemAt(1).widget()
-            debug_checkbox = debug_group.layout().itemAt(0).widget()
-
-            graphics_settings = {}
-            for setting, combo in profile_widget.graphics_controls.items():
-                graphics_settings[setting] = combo.currentText()
-
-            self.profiles[profile_name] = {
-                'branch': branch_combo.currentText(),
-                'debug_mode': debug_checkbox.isChecked(),
-                'graphics_settings': graphics_settings
-            }
-
-        data = {
-            'altv_folder': self.folder_path_input.text(),
-            'last_selected_profile': self.current_profile,
-            'profiles': self.profiles
-        }
-
-        with open(SETTINGS_FILE, 'w') as file:
-            json.dump(data, file, indent=4)
-
-    def load_profile_settings(self, index, settings):
-        profile_widget = self.profile_tabs.widget(index)
-        layout = profile_widget.layout()
-        scroll_area = layout.itemAt(0).widget()
-        scroll_widget = scroll_area.widget()
-        scroll_layout = scroll_widget.layout()
-
-        # Retrieve controls
-        branch_group = scroll_layout.itemAt(0).widget()
-        branch_combo = branch_group.layout().itemAt(0).widget()
-        debug_group = scroll_layout.itemAt(1).widget()
-        debug_checkbox = debug_group.layout().itemAt(0).widget()
-
-        branch = settings.get('branch', '')
-        if branch in ['release', 'rc', 'dev']:
-            branch_combo.setCurrentText(branch)
-        debug_checkbox.setChecked(settings.get('debug_mode', False))
-
-        graphics_settings = settings.get('graphics_settings', {})
-        for setting, value in graphics_settings.items():
-            if setting in profile_widget.graphics_controls:
-                profile_widget.graphics_controls[setting].setCurrentText(value)
 
     def closeEvent(self, event):
         self.save_settings()
